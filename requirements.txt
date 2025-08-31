@@ -1,0 +1,6 @@
+discord.py
+aiomysql
+aiohttp
+python-dotenv
+flask
+requests
