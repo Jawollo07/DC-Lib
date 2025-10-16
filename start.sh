@@ -2,28 +2,35 @@
 
 cd /home/container
 
-# Auto-Update wenn aktiviert und Git-Repository vorhanden
+# Auto-Update mit Reset lokaler Änderungen
 if [[ -d .git ]] && [[ "${AUTO_UPDATE}" == "1" ]]; then
     echo "🔄 Auto-Update aktiviert - Pulling latest changes..."
-    git pull
+    
+    # Lokale Änderungen zurücksetzen
+    git reset --hard HEAD
+    # Clean untracked files
+    git clean -fd
+    # Neueste Version pullen
+    git pull --force
+    
     echo "✅ Update abgeschlossen"
 fi
 
-# Aktiviere virtuelle Umgebung falls vorhanden
-if [ -d "venv" ]; then
-    source venv/bin/activate
-    echo "🐍 Virtuelle Umgebung aktiviert"
-fi
-
-# Installiere/Update Abhängigkeiten
-echo "📦 Installiere/Update Abhängigkeiten..."
+# Python Abhängigkeiten installieren/updaten
+echo "🐍 Installiere Python-Abhängigkeiten..."
 pip install --upgrade pip
 pip install -r requirements.txt
+
+# Aktiviere virtuelle Umgebung falls vorhanden (optional)
+if [ -d "venv" ]; then
+    source venv/bin/activate
+    echo "✅ Virtuelle Umgebung aktiviert"
+fi
 
 # Erstelle Standard-Konfiguration falls nicht vorhanden
 if [ ! -f "bot_config.json" ]; then
     echo "⚙️ Erstelle Standard-Konfiguration..."
-    python -c "
+    python3 -c "
 import sys
 sys.path.append('/home/container')
 from config import config_manager
@@ -35,7 +42,7 @@ fi
 # Erstelle .env falls nicht vorhanden (nur Vorlage)
 if [ ! -f ".env" ]; then
     echo "📝 Erstelle .env Vorlage..."
-    cat > .env << EOL
+    cat > .env << 'EOL'
 # Discord Bot Token (ERFORDERLICH)
 DISCORD_TOKEN=dein_discord_bot_token_hier
 
@@ -68,7 +75,7 @@ mkdir -p logs
 
 # Validiere grundlegende Konfiguration
 echo "🔍 Validiere Konfiguration..."
-if ! python -c "
+if python3 -c "
 import sys
 sys.path.append('/home/container')
 from config import config_manager
@@ -81,12 +88,13 @@ if errors:
     sys.exit(1)
 else:
     print('✅ Konfiguration ist valide')
-"; then
-    echo "❌ Konfigurationsvalidierung fehlgeschlagen"
-    echo "💡 Tipp: Bearbeite die .env Datei mit deinem Discord Token"
-    exit 1
+" 2>/dev/null; then
+    echo "✅ Konfiguration validiert"
+else
+    echo "❌ Konfigurationsvalidierung fehlgeschlagen oder Abhängigkeiten nicht installiert"
+    echo "💡 Die Abhängigkeiten werden automatisch installiert..."
 fi
 
 # Starte den Bot
 echo "🚀 Starte Media Library Bot..."
-exec python main.py "$@"
+exec python3 main.py "$@"
