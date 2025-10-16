@@ -1,6 +1,52 @@
-discord.py
-aiomysql
-aiohttp
-python-dotenv
-flask
-requests
+# Discord Bot
+discord.py>=2.3.0
+py-cord>=2.4.0
+
+# Web Framework
+Flask>=2.3.0
+Werkzeug>=2.3.0
+
+# Database
+aiomysql>=0.2.0
+mysql-connector-python>=8.1.0
+
+# HTTP Client
+aiohttp>=3.8.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# Date/Time Handling
+python-dateutil>=2.8.0
+
+# System Monitoring
+psutil>=5.9.0
+
+# API Clients (optional - nur für erweiterte Funktionen)
+spotipy>=2.23.0
+tmdbsimple>=2.9.0
+
+# Utilities
+requests>=2.31.0
+urllib3>=1.26.0
+
+# Async Utilities
+asyncio-mqtt>=0.16.0
+
+# Configuration
+PyYAML>=6.0
+
+# Logging
+colorlog>=6.7.0
+
+# Data Validation
+pydantic>=2.0.0
+
+# Caching
+redis>=4.5.0
+
+# Security
+cryptography>=41.0.0
+
+# Performance
+uvloop>=0.17.0; sys_platform != 'win32'
