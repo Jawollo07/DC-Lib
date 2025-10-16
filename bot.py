@@ -55,9 +55,9 @@ class MediaCommands:
             media_type="Art der Musik"
         )
         @app_commands.choices(media_type=[
-            app_commands.Choice(name="💿 Musik-CD", value="music_cd"),
-            app_commands.Choice(name="💿 Vinyl", value="vinyl"),
-            app_commands.Choice(name="🎧 Lied", value="song")
+            app_commands.Choice(name="Musik-CD", value="music_cd"),
+            app_commands.Choice(name="Vinyl", value="vinyl"),
+            app_commands.Choice(name="Lied", value="song")
         ])
         async def borrow_music(interaction: discord.Interaction, query: str, media_type: str):
             await self._borrow_media(interaction, media_type, query=query)
@@ -68,9 +68,9 @@ class MediaCommands:
             external_id="ID des Mediums"
         )
         @app_commands.choices(media_type=[
-            app_commands.Choice(name="💿 Musik-CD", value="music_cd"),
-            app_commands.Choice(name="💿 Vinyl", value="vinyl"),
-            app_commands.Choice(name="🎧 Lied", value="song")
+            app_commands.Choice(name="Musik-CD", value="music_cd"),
+            app_commands.Choice(name="Vinyl", value="vinyl"),
+            app_commands.Choice(name="Lied", value="song")
         ])
         async def return_music(interaction: discord.Interaction, media_type: str, external_id: str):
             await self._return_media(interaction, media_type, external_id)
@@ -419,8 +419,8 @@ class DiscordBot:
     def _setup_intents(self) -> discord.Intents:
         """Richtet die benötigten Discord Intents ein"""
         intents = discord.Intents.default()
-        intents.message_content = True
-        intents.members = True
+        intents.message_content = False  # Deaktiviert, da nur Slash-Commands verwendet werden
+        intents.members = True           # Für Nutzerinformationen und Admin-Befehle
         return intents
 
     def _register_events(self):
