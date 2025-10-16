@@ -9,7 +9,11 @@ load_dotenv()
 # Logging einrichten
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -52,7 +56,7 @@ class ConfigManager:
                 },
                 "boardgamegeek": {
                     "enabled": True,
-                    "api_key": ""  # BoardGameGeek benötigt keinen API Key
+                    "api_key": ""
                 },
                 "comic_vine": {
                     "enabled": True,
@@ -60,12 +64,12 @@ class ConfigManager:
                 },
                 "open_library": {
                     "enabled": True,
-                    "api_key": ""  # Open Library benötigt keinen API Key
+                    "api_key": ""
                 }
             },
             "media_settings": {
-                "due_period_days": 14,
-                "remind_days_before": 1,
+                "due_period_days": int(os.getenv("DUE_PERIOD_DAYS", 14)),
+                "remind_days_before": int(os.getenv("REMIND_DAYS_BEFORE", 1)),
                 "max_loans_per_user": 10,
                 "allow_extensions": True,
                 "max_extension_days": 7
@@ -81,8 +85,8 @@ class ConfigManager:
             },
             "web_dashboard": {
                 "enabled": True,
-                "host": "0.0.0.0",
-                "port": 5000,
+                "host": os.getenv("FLASK_HOST", "0.0.0.0"),
+                "port": int(os.getenv("FLASK_PORT", 5000)),
                 "password": os.getenv("DASHBOARD_PASSWORD", "admin"),
                 "enable_api": True
             },
@@ -94,7 +98,7 @@ class ConfigManager:
                 "database": os.getenv("MYSQL_DB", "media_library")
             },
             "logging": {
-                "level": "INFO",
+                "level": os.getenv("LOG_LEVEL", "INFO"),
                 "enable_file_logging": True,
                 "log_file": "bot.log",
                 "enable_discord_logging": False,
@@ -108,10 +112,8 @@ class ConfigManager:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     loaded_config = json.load(f)
-                    # Merge mit Default-Konfiguration für neue Einstellungen
                     return self._merge_configs(self.default_config, loaded_config)
             else:
-                # Erstelle Standard-Konfiguration
                 self._save_config(self.default_config)
                 return self.default_config.copy()
         except Exception as e:
@@ -160,16 +162,12 @@ class ConfigManager:
         keys = path.split('.')
         current = self.current_config
         
-        # Navigiere zum übergeordneten Objekt
         for key in keys[:-1]:
             if key not in current:
                 current[key] = {}
             current = current[key]
         
-        # Setze den Wert
         current[keys[-1]] = value
-        
-        # Speichere die Konfiguration
         return self._save_config(self.current_config)
     
     def get_all(self) -> Dict[str, Any]:
@@ -187,23 +185,23 @@ class ConfigManager:
         """Validiert die Konfiguration und gibt Fehler zurück"""
         errors = {}
         
-        # Discord Token
         if not self.get('discord.token'):
             errors['discord.token'] = "Discord Token ist erforderlich"
         
-        # Datenbank-Einstellungen
         if not self.get('database.user'):
             errors['database.user'] = "Datenbank Benutzer ist erforderlich"
         
         if not self.get('database.password'):
             errors['database.password'] = "Datenbank Passwort ist erforderlich"
         
+        if not self.get('database.database'):
+            errors['database.database'] = "Datenbank Name ist erforderlich"
+        
         return errors
 
 # Globale Konfigurations-Instanz
 config_manager = ConfigManager()
 
-# Bequemlichkeits-Funktionen
 def get_config(path: str, default: Any = None) -> Any:
     return config_manager.get(path, default)
 
@@ -216,7 +214,7 @@ def validate_required():
         error_msg = "\n".join([f"{key}: {value}" for key, value in errors.items()])
         raise SystemExit(f"Konfigurationsfehler:\n{error_msg}")
 
-# Medienarten-Konfiguration (statisch)
+# Medienarten-Konfiguration
 MEDIA_TYPES = {
     'book': {'name': '📚 Buch', 'color': '#3498db', 'enabled': True},
     'movie': {'name': '🎬 Film', 'color': '#9b59b6', 'enabled': True}, 

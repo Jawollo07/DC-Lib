@@ -5,22 +5,23 @@ import json
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta, datetime
 from typing import Optional, Dict, Any, List
+from functools import lru_cache
 
 # Korrigierter Import
 from config import config_manager, get_config, logger
 
-# Definieren von Base-URLs (hardcoded, da nicht in config.py)
+# Definieren von Base-URLs
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 COMICVINE_BASE_URL = "https://comicvine.gamespot.com/api"
 
 class Database:
-    """Datenbank-Verwaltungsklasse"""
+    """Datenbank-Verwaltungsklasse für Medienverwaltung"""
     
     def __init__(self):
         self.pool: Optional[aiomysql.Pool] = None
     
     async def create_pool(self) -> None:
-        """Erstellt einen Datenbank-Verbindungspool"""
+        """Erstellt einen Datenbank-Verbindungspool mit konfigurierbaren Parametern"""
         try:
             self.pool = await aiomysql.create_pool(
                 host=get_config('database.host', 'localhost'),
@@ -33,23 +34,23 @@ class Database:
                 maxsize=10,
                 cursorclass=aiomysql.DictCursor
             )
-            logger.info("Datenbank-Verbindungspool erstellt")
+            logger.info("Datenbank-Verbindungspool erfolgreich erstellt")
         except Exception as e:
             logger.error(f"Fehler beim Erstellen des DB-Pools: {e}")
             raise
     
     async def close_pool(self) -> None:
-        """Schließt den Datenbank-Verbindungspool"""
+        """Schließt den Datenbank-Verbindungspool sicher"""
         if self.pool:
             self.pool.close()
             await self.pool.wait_closed()
             logger.info("Datenbank-Verbindungspool geschlossen")
     
     async def init_tables(self) -> None:
-        """Initialisiert alle Datenbanktabellen"""
+        """Initialisiert alle Datenbanktabellen mit optimierten Indizes"""
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
-                # Medien Tabelle (vereinheitlicht für alle Medienarten)
+                # Medien Tabelle
                 await cur.execute("""
                     CREATE TABLE IF NOT EXISTS media_items (
                         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -97,7 +98,7 @@ class Database:
                     )
                 """)
                 
-                # Neue Tabelle für Dashboard-Stats (optional, für Verbesserung)
+                # Dashboard-Statistiken Tabelle
                 await cur.execute("""
                     CREATE TABLE IF NOT EXISTS dashboard_stats (
                         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -109,13 +110,13 @@ class Database:
         logger.info("Datenbanktabellen initialisiert")
 
 class MediaRepository:
-    """Datenbank-Operationen für alle Medienarten"""
+    """Datenbank-Operationen für Medienarten"""
     
     def __init__(self, db: Database):
         self.db = db
     
     async def borrow_media(self, user_id: int, username: str, media_type: str, media_info: dict, due_date: str):
-        """Fügt ein ausgeliehenes Medium hinzu"""
+        """Fügt ein ausgeliehenes Medium hinzu oder aktualisiert es"""
         async with self.db.pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("""
@@ -153,9 +154,10 @@ class MediaRepository:
                     media_info.get("players"),
                     due_date
                 ))
+                logger.info(f"Medium ausgeliehen: {media_type} - {media_info['title']} für User {user_id}")
     
     async def return_media(self, user_id: int, media_type: str, external_id: str):
-        """Gibt ein Medium zurück"""
+        """Gibt ein Medium zurück und loggt die Rückgabe"""
         async with self.db.pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -173,108 +175,128 @@ class MediaRepository:
                         "INSERT INTO rueckgabe_log (moderator_id, user_id, media_type, external_id, title) VALUES (%s, %s, %s, %s, %s)",
                         (user_id, user_id, media_type, external_id, media["title"])
                     )
-                return media
+                    logger.info(f"Medium zurückgegeben: {media_type} - {media['title']} für User {user_id}")
+                else:
+                    logger.warning(f"Medium nicht gefunden: {media_type} - {external_id} für User {user_id}")
     
-    async def get_user_media(self, user_id: int, media_type: str = None):
-        """Holt alle Medien eines Benutzers, optional gefiltert nach Typ"""
+    async def get_user_media(self, user_id: int) -> List[Dict[str, Any]]:
+        """Holt alle ausgeliehenen Medien eines Users"""
         async with self.db.pool.acquire() as conn:
             async with conn.cursor() as cur:
-                if media_type:
-                    await cur.execute(
-                        "SELECT title, due_date, media_type FROM media_items WHERE user_id = %s AND media_type = %s ORDER BY due_date",
-                        (user_id, media_type)
-                    )
-                else:
-                    await cur.execute(
-                        "SELECT title, due_date, media_type FROM media_items WHERE user_id = %s ORDER BY due_date",
-                        (user_id,)
-                    )
+                await cur.execute(
+                    "SELECT * FROM media_items WHERE user_id = %s ORDER BY due_date ASC",
+                    (user_id,)
+                )
                 return await cur.fetchall()
+    
+    async def get_overdue_media(self) -> List[Dict[str, Any]]:
+        """Holt alle überfälligen Medien"""
+        async with self.db.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT * FROM media_items WHERE due_date < CURDATE() ORDER BY due_date ASC"
+                )
+                return await cur.fetchall()
+    
+    async def get_due_soon_media(self, days: int = 3) -> List[Dict[str, Any]]:
+        """Holt Medien, die bald fällig sind"""
+        async with self.db.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT * FROM media_items WHERE due_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL %s DAY) AND reminded = FALSE",
+                    (days,)
+                )
+                return await cur.fetchall()
+    
+    async def mark_reminded(self, item_id: int):
+        """Markiert ein Item als erinnert"""
+        async with self.db.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE media_items SET reminded = TRUE WHERE id = %s",
+                    (item_id,)
+                )
 
 class ReminderRepository:
-    """Datenbank-Operationen für Erinnerungen (vervollständigt basierend auf Kontext)"""
+    """Datenbank-Operationen für Erinnerungen"""
     
     def __init__(self, db: Database):
         self.db = db
     
-    async def get_due_media(self, days_before: int) -> List[Dict[str, Any]]:
-        """Holt Medien, die in X Tagen fällig sind und noch nicht erinnert wurden"""
+    async def get_due_reminders(self) -> List[Dict[str, Any]]:
+        """Holt fällige Erinnerungen basierend auf Konfiguration"""
+        remind_days = get_config('media_settings.remind_days_before', 1)
         async with self.db.pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("""
-                    SELECT id, user_id, title, media_type, due_date
-                    FROM media_items
-                    WHERE due_date = DATE_ADD(CURDATE(), INTERVAL %s DAY)
+                    SELECT * FROM media_items 
+                    WHERE DATE(due_date) = DATE_ADD(CURDATE(), INTERVAL %s DAY)
                     AND reminded = FALSE
-                """, (days_before,))
+                """, (remind_days,))
                 return await cur.fetchall()
     
-    async def mark_media_reminded(self, user_id: int, title: str, media_type: str):
+    async def mark_as_reminded(self, item_id: int):
         """Markiert ein Medium als erinnert"""
         async with self.db.pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute("""
-                    UPDATE media_items
-                    SET reminded = TRUE
-                    WHERE user_id = %s AND title = %s AND media_type = %s
-                """, (user_id, title, media_type))
+                await cur.execute(
+                    "UPDATE media_items SET reminded = TRUE WHERE id = %s",
+                    (item_id,)
+                )
 
 class DashboardRepository:
-    """Datenbank-Operationen für das Web-Dashboard (neu hinzugefügt zur Fehlerbehebung)"""
+    """Datenbank-Operationen für Dashboard-Statistiken"""
     
     def __init__(self, db: Database):
         self.db = db
     
-    async def get_dashboard_stats(self) -> Dict[str, int]:
-        """Holt grundlegende Statistiken für das Dashboard"""
-        stats = {}
+    async def get_total_loans(self) -> int:
+        """Holt die Gesamtzahl der aktuellen Ausleihen"""
         async with self.db.pool.acquire() as conn:
             async with conn.cursor() as cur:
-                # Gesamte Ausleihen
-                await cur.execute("SELECT COUNT(*) as total_loans FROM media_items")
-                stats['total_loans'] = (await cur.fetchone())['total_loans']
-                
-                # Überfällige Medien
-                await cur.execute("SELECT COUNT(*) as overdue FROM media_items WHERE due_date < CURDATE()")
-                stats['overdue'] = (await cur.fetchone())['overdue']
-                
-                # Aktive Benutzer (letzte 30 Tage)
-                await cur.execute("""
-                    SELECT COUNT(DISTINCT user_id) as active_users 
-                    FROM media_items 
-                    WHERE created_on >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-                """)
-                stats['active_users'] = (await cur.fetchone())['active_users']
-                
-        return stats
+                await cur.execute("SELECT COUNT(*) as count FROM media_items")
+                result = await cur.fetchone()
+                return result['count']
     
-    async def log_dashboard_access(self, user_id: int, action: str):
-        """Loggt Dashboard-Zugriffe (Beispiel für Erweiterung)"""
+    async def get_overdue_count(self) -> int:
+        """Holt die Anzahl der überfälligen Medien"""
         async with self.db.pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute("""
-                    INSERT INTO dashboard_stats (stat_type, value) 
-                    VALUES ('access', 1)
-                """)  # Kann erweitert werden
+                await cur.execute("SELECT COUNT(*) as count FROM media_items WHERE due_date < CURDATE()")
+                result = await cur.fetchone()
+                return result['count']
+    
+    async def get_media_stats(self) -> Dict[str, int]:
+        """Holt Statistiken pro Medientyp"""
+        async with self.db.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT media_type, COUNT(*) as count FROM media_items GROUP BY media_type")
+                results = await cur.fetchall()
+                return {row['media_type']: row['count'] for row in results}
 
 class APIHandler:
-    """Handler für externe API-Anfragen (vervollständigt und verbessert)"""
+    """Handler für externe API-Anfragen mit Caching"""
     
     def __init__(self):
-        self.spotify_token = None
-        self.spotify_token_expiry = None  # Neu: Für Token-Expiration
-        self.igdb_token = None
-        self.igdb_token_expiry = None
-        self.genre_cache = None
+        self.spotify_token: Optional[str] = None
+        self.spotify_token_expiry: Optional[datetime] = None
+        self.igdb_token: Optional[str] = None
+        self.igdb_token_expiry: Optional[datetime] = None
+        self.genre_cache: Optional[Dict[int, str]] = None
     
-    async def search_books(self, isbn: str) -> Optional[Dict[str, Any]]:
-        """Sucht Bücher über Google Books API (vervollständigt aus Kontext)"""
-        if not self.validate_isbn(isbn):
+    @lru_cache(maxsize=1000)
+    async def search_books(self, query: str) -> Optional[List[Dict[str, Any]]]:
+        """Sucht Bücher über Google Books API mit Caching"""
+        if not get_config('apis.google_books.enabled', True):
             return None
         
-        api_key = get_config('apis.google_books.api_key')
         url = "https://www.googleapis.com/books/v1/volumes"
-        params = {"q": f"isbn:{isbn.strip().replace('-', '')}"}
+        params = {
+            "q": query,
+            "maxResults": 5
+        }
+        
+        api_key = get_config('apis.google_books.api_key')
         if api_key:
             params["key"] = api_key
         
@@ -282,83 +304,81 @@ class APIHandler:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(url, params=params) as resp:
                     if resp.status != 200:
+                        logger.warning(f"Google Books API Status: {resp.status}")
                         return None
+                    
                     data = await resp.json()
                     items = data.get("items", [])
-                    if not items:
-                        return None
-                    volume_info = items[0].get("volumeInfo", {})
-                    return {
-                        "external_id": items[0].get("id"),
-                        "title": volume_info.get("title", "Unbekannter Titel"),
-                        "subtitle": volume_info.get("subtitle"),
-                        "authors": ", ".join(volume_info.get("authors", [])),
-                        "description": volume_info.get("description", ""),
-                        "cover": volume_info.get("imageLinks", {}).get("thumbnail", ""),
-                        "release_date": volume_info.get("publishedDate", ""),
-                        "publisher": volume_info.get("publisher", ""),
-                        "isbn": isbn,
-                        "genres": ", ".join(volume_info.get("categories", [])),
-                        "rating": volume_info.get("averageRating", 0)
-                    }
+                    
+                    books = []
+                    for item in items:
+                        volume_info = item.get("volumeInfo", {})
+                        authors = ", ".join(volume_info.get("authors", []))
+                        genres = ", ".join(volume_info.get("categories", []))
+                        books.append({
+                            "external_id": item.get("id", ""),
+                            "title": volume_info.get("title", "Unbekannter Titel"),
+                            "subtitle": volume_info.get("subtitle", ""),
+                            "authors": authors,
+                            "description": volume_info.get("description", ""),
+                            "cover": volume_info.get("imageLinks", {}).get("thumbnail", ""),
+                            "publisher": volume_info.get("publisher", ""),
+                            "release_date": volume_info.get("publishedDate", ""),
+                            "isbn": volume_info.get("industryIdentifiers", [{}])[0].get("identifier", "") if volume_info.get("industryIdentifiers") else ""
+                        })
+                    return books
         except Exception as e:
             logger.error(f"Fehler bei Google Books API-Anfrage: {e}")
             return None
     
-    # ... (Weitere Methoden wie in der Kopie, mit get_config ersetzt)
-    
-    async def search_board_games(self, query: str) -> Optional[List[Dict[str, Any]]]:
-        """Sucht Brettspiele über Board Game Atlas API"""
-        client_id = get_config('apis.boardgameatlas.client_id')  # Korrigiert
-        if not client_id:
+    async def search_movies(self, query: str) -> Optional[List[Dict[str, Any]]]:
+        """Sucht Filme über TMDB API"""
+        if not get_config('apis.tmdb.enabled', True):
             return None
         
-        url = "https://api.boardgameatlas.com/api/search"
+        url = f"{TMDB_BASE_URL}/search/movie"
         params = {
-            "name": query,
-            "client_id": client_id,
-            "limit": 5
+            "api_key": get_config('apis.tmdb.api_key'),
+            "query": query,
+            "language": "de-DE",
+            "page": 1
         }
         
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(url, params=params) as resp:
                     if resp.status != 200:
+                        logger.warning(f"TMDB API Status: {resp.status}")
                         return None
                     
                     data = await resp.json()
-                    games = data.get("games", [])
+                    results = data.get("results", [])
                     
-                    results = []
-                    for game in games:
-                        details = await self._get_bgg_game_details(game.get("id", ""))  # Optionaler Aufruf
-                        results.append({
-                            "external_id": game.get("id"),
-                            "title": game.get("name", "Unbekannter Titel"),
-                            "description": details.get("description", game.get("description", "")),
-                            "cover": game.get("thumb_url", ""),
-                            "release_date": game.get("year_published", ""),
-                            "publisher": ", ".join([p["name"] for p in game.get("publishers", [])]),
-                            "rating": game.get("average_user_rating", 0),
-                            "players": details.get("players", game.get("min_players", "?") + "-" + game.get("max_players", "?")),
-                            "duration": details.get("duration", game.get("playtime", 0))
+                    movies = []
+                    for movie in results:
+                        genres = await self._get_tmdb_genres(movie.get("genre_ids", []))
+                        movies.append({
+                            "external_id": str(movie["id"]),
+                            "title": movie.get("title", "Unbekannter Titel"),
+                            "description": movie.get("overview", ""),
+                            "cover": f"https://image.tmdb.org/t/p/w500{movie.get('poster_path', '')}" if movie.get("poster_path") else "",
+                            "release_date": movie.get("release_date", ""),
+                            "genres": ", ".join(genres),
+                            "rating": movie.get("vote_average")
                         })
-                    
-                    return results
-                    
+                    return movies
         except Exception as e:
-            logger.error(f"Fehler bei Board Game Atlas API-Anfrage: {e}")
+            logger.error(f"Fehler bei TMDB API-Anfrage: {e}")
             return None
     
     async def search_comics(self, query: str) -> Optional[List[Dict[str, Any]]]:
         """Sucht Comics über Comic Vine API"""
-        api_key = get_config('apis.comic_vine.api_key')  # Korrigiert
-        if not api_key:
+        if not get_config('apis.comic_vine.enabled', True):
             return None
         
         url = f"{COMICVINE_BASE_URL}/search"
         params = {
-            "api_key": api_key,
+            "api_key": get_config('apis.comic_vine.api_key'),
             "format": "json",
             "query": query,
             "resources": "volume",
@@ -369,6 +389,7 @@ class APIHandler:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(url, params=params) as resp:
                     if resp.status != 200:
+                        logger.warning(f"Comic Vine API Status: {resp.status}")
                         return None
                     
                     data = await resp.json()
@@ -376,10 +397,7 @@ class APIHandler:
                     
                     comics = []
                     for comic in results:
-                        cover_url = ""
-                        if comic.get("image"):
-                            cover_url = comic["image"]["medium_url"]
-                        
+                        cover_url = comic.get("image", {}).get("medium_url", "")
                         comics.append({
                             "external_id": str(comic["id"]),
                             "title": comic.get("name", "Unbekannter Titel"),
@@ -388,22 +406,23 @@ class APIHandler:
                             "release_date": comic.get("start_year", ""),
                             "publisher": comic.get("publisher", {}).get("name", "Unbekannt")
                         })
-                    
                     return comics
-                    
         except Exception as e:
             logger.error(f"Fehler bei Comic Vine API-Anfrage: {e}")
             return None
     
     async def search_magazines(self, query: str) -> Optional[List[Dict[str, Any]]]:
         """Sucht Zeitschriften über Google Books API"""
-        api_key = get_config('apis.google_books.api_key')  # Korrigiert
+        if not get_config('apis.google_books.enabled', True):
+            return None
+        
         url = "https://www.googleapis.com/books/v1/volumes"
         params = {
             "q": f"{query} subject:magazine",
             "maxResults": 5
         }
         
+        api_key = get_config('apis.google_books.api_key')
         if api_key:
             params["key"] = api_key
         
@@ -411,6 +430,7 @@ class APIHandler:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(url, params=params) as resp:
                     if resp.status != 200:
+                        logger.warning(f"Google Books Magazine API Status: {resp.status}")
                         return None
                     
                     data = await resp.json()
@@ -429,18 +449,15 @@ class APIHandler:
                             "release_date": volume_info.get("publishedDate", ""),
                             "isbn": volume_info.get("industryIdentifiers", [{}])[0].get("identifier", "") if volume_info.get("industryIdentifiers") else ""
                         })
-                    
                     return magazines
-                    
         except Exception as e:
             logger.error(f"Fehler bei Google Books Magazine API-Anfrage: {e}")
             return None
     
-    # Hilfsmethoden (verbessert mit Expiration-Check)
     async def _get_spotify_token(self):
-        """Holt Spotify Access Token (mit Expiration-Check)"""
+        """Holt Spotify Access Token mit Ablaufprüfung"""
         if self.spotify_token and self.spotify_token_expiry and datetime.now() < self.spotify_token_expiry:
-            return  # Token noch gültig
+            return
         
         client_id = get_config('apis.spotify.client_id')
         client_secret = get_config('apis.spotify.client_secret')
@@ -465,14 +482,14 @@ class APIHandler:
                     if resp.status == 200:
                         token_data = await resp.json()
                         self.spotify_token = token_data["access_token"]
-                        self.spotify_token_expiry = datetime.now() + timedelta(seconds=token_data.get("expires_in", 3600) - 300)  # 5 Min Puffer
+                        self.spotify_token_expiry = datetime.now() + timedelta(seconds=token_data.get("expires_in", 3600) - 300)
                     else:
                         logger.error(f"Fehler beim Holen des Spotify Tokens: Status {resp.status}")
         except Exception as e:
             logger.error(f"Fehler bei Spotify Token-Anfrage: {e}")
     
     async def _get_igdb_token(self):
-        """Holt IGDB Access Token (mit Expiration-Check)"""
+        """Holt IGDB Access Token mit Ablaufprüfung"""
         if self.igdb_token and self.igdb_token_expiry and datetime.now() < self.igdb_token_expiry:
             return
         
@@ -502,7 +519,7 @@ class APIHandler:
             logger.error(f"Fehler bei IGDB Token-Anfrage: {e}")
     
     async def _get_tmdb_genres(self, genre_ids: List[int]) -> List[str]:
-        """Holt Genre-Namen für TMDB Genre-IDs"""
+        """Holt Genre-Namen für TMDB Genre-IDs aus Cache"""
         if not get_config('apis.tmdb.api_key'):
             return []
         
@@ -527,8 +544,8 @@ class APIHandler:
                         data = await resp.json()
                         self.genre_cache = {genre["id"]: genre["name"] for genre in data.get("genres", [])}
                     else:
-                        self.genre_cache = {}
                         logger.error(f"Fehler beim Laden der TMDB Genres: Status {resp.status}")
+                        self.genre_cache = {}
         except Exception as e:
             logger.error(f"Fehler beim Laden der TMDB Genres: {e}")
             self.genre_cache = {}
@@ -550,12 +567,11 @@ class APIHandler:
         return None
     
     def validate_isbn(self, isbn: str) -> bool:
-        """Validiert eine ISBN (erweitert um Checksumme für Genauigkeit)"""
+        """Validiert eine ISBN mit Prüfsumme"""
         clean_isbn = isbn.strip().replace("-", "")
         if not clean_isbn.isdigit() or len(clean_isbn) not in [10, 13]:
             return False
         
-        # Optionale Checksumme-Validierung für ISBN-13 (Beispiel)
         if len(clean_isbn) == 13:
             check = 0
             for i, digit in enumerate(clean_isbn[:-1]):
@@ -563,11 +579,18 @@ class APIHandler:
             check_digit = (10 - (check % 10)) % 10
             return int(clean_isbn[-1]) == check_digit
         
-        return True  # Für ISBN-10 ähnlich implementierbar
+        if len(clean_isbn) == 10:
+            check = 0
+            for i, digit in enumerate(clean_isbn[:-1]):
+                check += int(digit) * (10 - i)
+            check_digit = (11 - (check % 11)) % 11
+            return clean_isbn[-1] in (str(check_digit), 'X')
+        
+        return False
 
-# Globale Instanzen (erweitert um dashboard_repo)
+# Globale Instanzen
 db = Database()
 media_repo = MediaRepository(db)
 reminder_repo = ReminderRepository(db)
-dashboard_repo = DashboardRepository(db)  # Neu: Behebt den NameError
+dashboard_repo = DashboardRepository(db)
 api_handler = APIHandler()

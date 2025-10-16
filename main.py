@@ -2,13 +2,14 @@ import asyncio
 from threading import Thread
 import sys
 import argparse
+from typing import Optional
 
 from config import config_manager, validate_required, logger
 from database import db
 from bot import DiscordBot
 from web_dashboard import create_dashboard_app
 
-def parse_arguments():
+def parse_arguments() -> argparse.Namespace:
     """Parst Kommandozeilen-Argumente"""
     parser = argparse.ArgumentParser(description='Media Library Bot')
     parser.add_argument('--setup', action='store_true', help='Startet den Setup-Modus')
@@ -19,54 +20,50 @@ def parse_arguments():
     return parser.parse_args()
 
 async def setup_mode():
-    """Setup-Modus für erste Einrichtung"""
-    print("🎯 Media Library Bot - Setup Modus")
-    print("=" * 50)
+    """Setup-Modus für die erste Einrichtung"""
+    logger.info("🎯 Media Library Bot - Setup Modus")
     
     config = config_manager.get_all()
     
-    print("\n📋 Aktuelle Konfiguration:")
-    print(f"• Discord Token: {'✅ Gesetzt' if config['discord']['token'] else '❌ Fehlt'}")
-    print(f"• Datenbank: {config['database']['user']}@{config['database']['host']}")
-    print(f"• APIs: {sum(1 for api in config['apis'].values() if api.get('enabled'))} aktiviert")
+    logger.info("\n📋 Aktuelle Konfiguration:")
+    logger.info(f"• Discord Token: {'✅ Gesetzt' if config['discord']['token'] else '❌ Fehlt'}")
+    logger.info(f"• Datenbank: {config['database']['user']}@{config['database']['host']}")
+    logger.info(f"• APIs: {sum(1 for api in config['apis'].values() if api.get('enabled'))} aktiviert")
     
     errors = config_manager.validate_config()
     if errors:
-        print(f"\n❌ Konfigurationsfehler: {len(errors)}")
+        logger.error(f"\n❌ Konfigurationsfehler: {len(errors)}")
         for key, error in errors.items():
-            print(f"  - {key}: {error}")
-        
-        print("\n🔧 Bitte korrigiere die Fehler in der bot_config.json Datei")
-        print("   oder verwende '/setup' im Discord nach dem Start.")
+            logger.error(f"  - {key}: {error}")
+        logger.info("\n🔧 Bitte korrigiere die Fehler in der bot_config.json Datei")
     else:
-        print("\n✅ Konfiguration ist valide!")
+        logger.info("\n✅ Konfiguration ist valide!")
     
-    print("\n🚀 Starte Bot...")
+    logger.info("\n🚀 Starte Bot...")
 
 async def main():
-    """Hauptfunktion"""
+    """Hauptfunktion des Bots"""
     args = parse_arguments()
     
     try:
-        # Handle Kommandozeilen-Argumente
         if args.config:
             config_manager.config_file = args.config
-            print(f"📁 Verwende Konfiguration: {args.config}")
+            logger.info(f"📁 Verwende Konfiguration: {args.config}")
         
         if args.create_config:
             config_manager._save_config(config_manager.default_config)
-            print("✅ Standard-Konfiguration erstellt: bot_config.json")
+            logger.info("✅ Standard-Konfiguration erstellt: bot_config.json")
             return
         
         if args.validate:
             errors = config_manager.validate_config()
             if errors:
-                print("❌ Konfigurationsfehler:")
+                logger.error("❌ Konfigurationsfehler:")
                 for key, error in errors.items():
-                    print(f"  - {key}: {error}")
+                    logger.error(f"  - {key}: {error}")
                 sys.exit(1)
             else:
-                print("✅ Konfiguration ist valide!")
+                logger.info("✅ Konfiguration ist valide!")
                 return
         
         if args.setup:
@@ -82,18 +79,19 @@ async def main():
         # Bot erstellen
         bot = DiscordBot()
         
-        # Web-Dashboard starten falls aktiviert
+        # Web-Dashboard asynchron starten
         if config_manager.get('web_dashboard.enabled', True):
-            from web_dashboard import create_dashboard_app
             flask_app = create_dashboard_app(bot.bot)
             
-            Thread(target=lambda: flask_app.run(
-                host=config_manager.get('web_dashboard.host', '0.0.0.0'),
-                port=config_manager.get('web_dashboard.port', 5000),
-                debug=False,
-                use_reloader=False
-            ), daemon=True).start()
+            def run_flask():
+                flask_app.run(
+                    host=config_manager.get('web_dashboard.host', '0.0.0.0'),
+                    port=config_manager.get('web_dashboard.port', 5000),
+                    debug=False,
+                    use_reloader=False
+                )
             
+            Thread(target=run_flask, daemon=True).start()
             logger.info(f"🌐 Web-Dashboard gestartet auf {config_manager.get('web_dashboard.host')}:{config_manager.get('web_dashboard.port')}")
         
         # Bot starten
@@ -103,7 +101,6 @@ async def main():
         logger.error(f"❌ Fehler beim Starten des Bots: {e}")
         raise
     finally:
-        # Aufräumen
         await db.close_pool()
 
 if __name__ == "__main__":
