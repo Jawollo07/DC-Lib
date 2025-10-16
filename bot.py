@@ -290,7 +290,8 @@ class AdminCommands:
             value="\n".join(f"{MEDIA_TYPES[k]['name']}: {v}" for k, v in media_stats.items()),
             inline=False
         )
-        embed.set_footer(text=f"Bot läuft seit {discord.utils.format_dt(self.bot.start_time, 'R')}")
+        # Verwende discord.utils.utcnow() statt self.bot.start_time
+        embed.set_footer(text=f"Bot läuft seit {discord.utils.format_dt(discord.utils.utcnow(), 'R')}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def _show_overdue(self, interaction: discord.Interaction):

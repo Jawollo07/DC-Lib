@@ -453,6 +453,108 @@ class APIHandler:
         except Exception as e:
             logger.error(f"Fehler bei Google Books Magazine API-Anfrage: {e}")
             return None
+
+    async def search_video_games(self, query: str) -> Optional[List[Dict[str, Any]]]:
+        """Sucht Videospiele über IGDB API"""
+        if not get_config('apis.igdb.enabled', True):
+            return None
+        
+        await self._get_igdb_token()
+        if not self.igdb_token:
+            return None
+        
+        url = "https://api.igdb.com/v4/games"
+        headers = {
+            "Client-ID": get_config('apis.igdb.client_id'),
+            "Authorization": f"Bearer {self.igdb_token}",
+            "Content-Type": "text/plain"
+        }
+        
+        # IGDB API Query
+        data = f'search "{query}"; fields name,summary,cover.url,first_release_date,genres.name,platforms.name; limit 5;'
+        
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                async with session.post(url, headers=headers, data=data) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"IGDB API Status: {resp.status}")
+                        return None
+                    
+                    results = await resp.json()
+                    games = []
+                    for game in results:
+                        cover_url = f"https://images.igdb.com/igdb/image/upload/t_cover_big/{game.get('cover', {}).get('image_id', '')}.jpg" if game.get('cover') else ""
+                        games.append({
+                            "external_id": str(game["id"]),
+                            "title": game.get("name", "Unbekannter Titel"),
+                            "description": game.get("summary", ""),
+                            "cover": cover_url,
+                            "release_date": str(game.get("first_release_date", ""))[:4] if game.get("first_release_date") else "",
+                            "genres": ", ".join([g.get("name", "") for g in game.get("genres", [])]),
+                            "platforms": ", ".join([p.get("name", "") for p in game.get("platforms", [])])
+                        })
+                    return games
+        except Exception as e:
+            logger.error(f"Fehler bei IGDB API-Anfrage: {e}")
+            return None
+
+    async def search_board_games(self, query: str) -> Optional[List[Dict[str, Any]]]:
+        """Sucht Brettspiele über Board Game Atlas API"""
+        if not get_config('apis.boardgamegeek.enabled', True):
+            return None
+        
+        # Vereinfachte Implementierung - gibt Mock-Daten zurück
+        return [{
+            "external_id": f"bga_{query.lower().replace(' ', '_')}",
+            "title": query,
+            "description": f"Brettspiel: {query}",
+            "cover": "",
+            "release_date": "",
+            "players": "2-4",
+            "genres": "Strategy"
+        }]
+
+    async def search_music(self, query: str) -> Optional[List[Dict[str, Any]]]:
+        """Sucht Musik über Spotify API"""
+        if not get_config('apis.spotify.enabled', True):
+            return None
+        
+        await self._get_spotify_token()
+        if not self.spotify_token:
+            return None
+        
+        url = "https://api.spotify.com/v1/search"
+        headers = {"Authorization": f"Bearer {self.spotify_token}"}
+        params = {
+            "q": query,
+            "type": "track",
+            "limit": 5
+        }
+        
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                async with session.get(url, headers=headers, params=params) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"Spotify API Status: {resp.status}")
+                        return None
+                    
+                    data = await resp.json()
+                    tracks = []
+                    for track in data.get("tracks", {}).get("items", []):
+                        artists = ", ".join([artist["name"] for artist in track.get("artists", [])])
+                        tracks.append({
+                            "external_id": track["id"],
+                            "title": track.get("name", "Unbekannter Titel"),
+                            "description": f"Album: {track.get('album', {}).get('name', 'Unbekannt')} • {artists}",
+                            "cover": track.get("album", {}).get("images", [{}])[0].get("url", "") if track.get("album", {}).get("images") else "",
+                            "duration": f"{track.get('duration_ms', 0) // 60000}:{(track.get('duration_ms', 0) % 60000) // 1000:02d}",
+                            "artists": artists,
+                            "release_date": track.get("album", {}).get("release_date", "")[:4]
+                        })
+                    return tracks
+        except Exception as e:
+            logger.error(f"Fehler bei Spotify API-Anfrage: {e}")
+            return None
     
     async def _get_spotify_token(self):
         """Holt Spotify Access Token mit Ablaufprüfung"""

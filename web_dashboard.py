@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session
 from functools import wraps
+import asyncio
 from config import config_manager, get_config, logger
 from database import dashboard_repo
 import hashlib
@@ -33,12 +34,13 @@ def create_dashboard_app(bot):
 
     @app.route('/')
     @login_required
-    async def dashboard():
-        """Haupt-Dashboard-Seite"""
+    def dashboard():
+        """Haupt-Dashboard-Seite - SYNCHRON gemacht"""
         try:
-            total_loans = await dashboard_repo.get_total_loans()
-            overdue_count = await dashboard_repo.get_overdue_count()
-            media_stats = await dashboard_repo.get_media_stats()
+            # Asynchrone Funktionen synchron aufrufen
+            total_loans = asyncio.run(dashboard_repo.get_total_loans())
+            overdue_count = asyncio.run(dashboard_repo.get_overdue_count())
+            media_stats = asyncio.run(dashboard_repo.get_media_stats())
             return render_template_string(
                 DASHBOARD_TEMPLATE,
                 total_loans=total_loans,
@@ -57,12 +59,13 @@ def create_dashboard_app(bot):
 
     @app.route('/api/stats', methods=['GET'])
     @login_required
-    async def api_stats():
-        """API-Endpunkt für Statistiken"""
+    def api_stats():
+        """API-Endpunkt für Statistiken - SYNCHRON gemacht"""
         try:
-            total_loans = await dashboard_repo.get_total_loans()
-            overdue_count = await dashboard_repo.get_overdue_count()
-            media_stats = await dashboard_repo.get_media_stats()
+            # Asynchrone Funktionen synchron aufrufen
+            total_loans = asyncio.run(dashboard_repo.get_total_loans())
+            overdue_count = asyncio.run(dashboard_repo.get_overdue_count())
+            media_stats = asyncio.run(dashboard_repo.get_media_stats())
             return jsonify({
                 'total_loans': total_loans,
                 'overdue_count': overdue_count,
