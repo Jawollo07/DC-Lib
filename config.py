@@ -50,13 +50,17 @@ class ConfigManager:
                     "client_id": os.getenv("IGDB_CLIENT_ID", ""),
                     "client_secret": os.getenv("IGDB_CLIENT_SECRET", "")
                 },
-                "board_game_atlas": {
+                "boardgamegeek": {
                     "enabled": True,
-                    "client_id": os.getenv("BOARDGAMEATLAS_CLIENT_ID", "")
+                    "api_key": ""  # BoardGameGeek benötigt keinen API Key
                 },
                 "comic_vine": {
                     "enabled": True,
                     "api_key": os.getenv("COMICVINE_API_KEY", "")
+                },
+                "open_library": {
+                    "enabled": True,
+                    "api_key": ""  # Open Library benötigt keinen API Key
                 }
             },
             "media_settings": {

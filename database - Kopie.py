@@ -220,22 +220,10 @@ class APIHandler:
     async def fetch_book_by_isbn(self, isbn: str) -> Optional[Dict[str, Any]]:
         """Holt Buchinformationen von der Google Books API"""
         clean_isbn = isbn.strip().replace("-", "")
+        url = f"https://www.googleapis.com/books/v1/volumes?q=isbn:{clean_isbn}"
         
-        # Zuerst Google Books versuchen
-        google_books_result = await self._fetch_google_books(clean_isbn)
-        if google_books_result:
-            return google_books_result
-        
-        # Fallback: Open Library
-        return await self._fetch_open_library(clean_isbn)
-    
-    async def _fetch_google_books(self, isbn: str) -> Optional[Dict[str, Any]]:
-        """Holt Buchinformationen von Google Books"""
-        api_key = get_config('apis.google_books.api_key')
-        url = f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}"
-        
-        if api_key:
-            url += f"&key={api_key}"
+        if config.GB_API_KEY:
+            url += f"&key={config.GB_API_KEY}"
         
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
@@ -249,7 +237,7 @@ class APIHandler:
                         
                     item = data["items"][0]["volumeInfo"]
                     return {
-                        "external_id": isbn,
+                        "external_id": clean_isbn,
                         "title": item.get("title", "Unbekannter Titel"),
                         "subtitle": item.get("subtitle", ""),
                         "authors": ", ".join(item.get("authors", ["Unbekannter Autor"])),
@@ -257,55 +245,21 @@ class APIHandler:
                         "cover": item.get("imageLinks", {}).get("thumbnail", ""),
                         "publisher": item.get("publisher", ""),
                         "release_date": item.get("publishedDate", ""),
-                        "isbn": isbn
+                        "isbn": clean_isbn
                     }
         except Exception as e:
             logger.error(f"Fehler bei Google Books API-Anfrage für ISBN {isbn}: {e}")
             return None
     
-    async def _fetch_open_library(self, isbn: str) -> Optional[Dict[str, Any]]:
-        """Holt Buchinformationen von Open Library (Fallback)"""
-        url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
-        
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                async with session.get(url) as resp:
-                    if resp.status != 200:
-                        return None
-                        
-                    data = await resp.json()
-                    book_key = f"ISBN:{isbn}"
-                    
-                    if book_key not in data:
-                        return None
-                    
-                    book_data = data[book_key]
-                    authors = [author["name"] for author in book_data.get("authors", [])]
-                    
-                    return {
-                        "external_id": isbn,
-                        "title": book_data.get("title", "Unbekannter Titel"),
-                        "authors": ", ".join(authors) if authors else "Unbekannter Autor",
-                        "description": book_data.get("notes", ""),
-                        "cover": book_data.get("cover", {}).get("large", ""),
-                        "publisher": ", ".join([p["name"] for p in book_data.get("publishers", [])]),
-                        "release_date": book_data.get("publish_date", ""),
-                        "isbn": isbn
-                    }
-        except Exception as e:
-            logger.error(f"Fehler bei Open Library API-Anfrage für ISBN {isbn}: {e}")
-            return None
-    
     # Film/TV APIs
     async def search_movies(self, title: str) -> Optional[List[Dict[str, Any]]]:
         """Sucht Filme nach Titel über TMDB API"""
-        api_key = get_config('apis.tmdb.api_key')
-        if not api_key:
+        if not config.TMDB_API_KEY:
             return None
             
-        url = "https://api.themoviedb.org/3/search/movie"
+        url = f"{config.TMDB_BASE_URL}/search/movie"
         params = {
-            "api_key": api_key,
+            "api_key": config.TMDB_API_KEY,
             "query": title,
             "language": "de-DE",
             "include_adult": False
@@ -322,15 +276,17 @@ class APIHandler:
                     
                     movies = []
                     for movie in results[:5]:
+                        genre_names = await self._get_tmdb_genres(movie.get("genre_ids", []))
+                        
                         movies.append({
                             "external_id": str(movie["id"]),
                             "title": movie.get("title", "Unbekannter Titel"),
                             "subtitle": movie.get("original_title", ""),
                             "description": movie.get("overview", ""),
-                            "cover": f"https://image.tmdb.org/t/p/w500{movie.get('poster_path', '')}" if movie.get("poster_path") else "",
+                            "cover": f"{config.TMDB_IMAGE_BASE_URL}{movie.get('poster_path', '')}" if movie.get("poster_path") else "",
                             "release_date": movie.get("release_date", "Unbekannt"),
                             "rating": movie.get("vote_average", 0),
-                            "genres": "Unbekannt",  # Vereinfacht für jetzt
+                            "genres": ", ".join(genre_names) if genre_names else "Unbekannt",
                             "duration": movie.get("runtime", 0)
                         })
                     
@@ -342,13 +298,12 @@ class APIHandler:
     
     async def search_tv_shows(self, title: str) -> Optional[List[Dict[str, Any]]]:
         """Sucht TV-Serien über TMDB API"""
-        api_key = get_config('apis.tmdb.api_key')
-        if not api_key:
+        if not config.TMDB_API_KEY:
             return None
             
-        url = "https://api.themoviedb.org/3/search/tv"
+        url = f"{config.TMDB_BASE_URL}/search/tv"
         params = {
-            "api_key": api_key,
+            "api_key": config.TMDB_API_KEY,
             "query": title,
             "language": "de-DE",
             "include_adult": False
@@ -365,15 +320,17 @@ class APIHandler:
                     
                     tv_shows = []
                     for show in results[:5]:
+                        genre_names = await self._get_tmdb_genres(show.get("genre_ids", []))
+                        
                         tv_shows.append({
                             "external_id": str(show["id"]),
                             "title": show.get("name", "Unbekannter Titel"),
                             "subtitle": show.get("original_name", ""),
                             "description": show.get("overview", ""),
-                            "cover": f"https://image.tmdb.org/t/p/w500{show.get('poster_path', '')}" if show.get("poster_path") else "",
+                            "cover": f"{config.TMDB_IMAGE_BASE_URL}{show.get('poster_path', '')}" if show.get("poster_path") else "",
                             "release_date": show.get("first_air_date", "Unbekannt"),
                             "rating": show.get("vote_average", 0),
-                            "genres": "Unbekannt"
+                            "genres": ", ".join(genre_names) if genre_names else "Unbekannt"
                         })
                     
                     return tv_shows
@@ -385,16 +342,13 @@ class APIHandler:
     # Musik APIs
     async def search_music(self, query: str, search_type: str = "album") -> Optional[List[Dict[str, Any]]]:
         """Sucht Musik über Spotify API"""
-        client_id = get_config('apis.spotify.client_id')
-        client_secret = get_config('apis.spotify.client_secret')
-        
-        if not client_id or not client_secret:
+        if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
             return None
         
         if not self.spotify_token:
             await self._get_spotify_token()
         
-        url = "https://api.spotify.com/v1/search"
+        url = f"{config.SPOTIFY_BASE_URL}/search"
         params = {
             "q": query,
             "type": search_type,
@@ -431,6 +385,7 @@ class APIHandler:
                                 "artists": artists,
                                 "cover": item["images"][0]["url"] if item.get("images") else "",
                                 "release_date": item.get("release_date", ""),
+                                "upc": item.get("external_ids", {}).get("upc", ""),
                                 "media_type": "music_cd"
                             }
                         elif search_type == "track":
@@ -454,9 +409,9 @@ class APIHandler:
             logger.error(f"Fehler bei Spotify API-Anfrage: {e}")
             return None
     
-    async def search_musicbrainz(self, query: str) -> Optional[List[Dict[str, Any]]]:
-        """Sucht Musik über MusicBrainz API"""
-        url = "https://musicbrainz.org/ws/2/release"
+    async def search_musicbrainz(self, query: str, entity: str = "release") -> Optional[List[Dict[str, Any]]]:
+        """Sucht Musik über MusicBrainz API (für Vinyl, CDs etc.)"""
+        url = f"{config.MUSICBRAINZ_BASE_URL}/{entity}"
         params = {
             "query": query,
             "fmt": "json",
@@ -464,7 +419,7 @@ class APIHandler:
         }
         
         headers = {
-            "User-Agent": "MediaLibraryBot/1.0",
+            "User-Agent": "DiscordMediaBot/1.0",
             "Accept": "application/json"
         }
         
@@ -489,6 +444,10 @@ class APIHandler:
                             "media_type": "vinyl" if "Vinyl" in release.get("packaging", "") else "music_cd"
                         }
                         
+                        cover_url = await self._get_musicbrainz_cover(release["id"])
+                        if cover_url:
+                            result["cover"] = cover_url
+                        
                         results.append(result)
                     
                     return results
@@ -497,164 +456,180 @@ class APIHandler:
             logger.error(f"Fehler bei MusicBrainz API-Anfrage: {e}")
             return None
     
-    # Brettspiele API - BoardGameGeek XML API
-    async def search_board_games(self, query: str) -> Optional[List[Dict[str, Any]]]:
-        """Sucht Brettspiele über BoardGameGeek API"""
+    # Videospiele API
+    async def search_video_games(self, query: str) -> Optional[List[Dict[str, Any]]]:
+        """Sucht Videospiele über IGDB API"""
+        if not config.IGDB_CLIENT_ID or not config.IGDB_CLIENT_SECRET:
+            return None
+        
+        if not self.igdb_token:
+            await self._get_igdb_token()
+        
+        url = f"{config.IGDB_BASE_URL}/games"
+        headers = {
+            "Client-ID": config.IGDB_CLIENT_ID,
+            "Authorization": f"Bearer {self.igdb_token}",
+            "Content-Type": "application/json"
+        }
+        
+        # IGDB API verwendet eine spezielle Abfragesprache
+        data = f"""
+            fields name, cover.url, first_release_date, summary, genres.name, platforms.name, rating, involved_companies.company.name;
+            search "{query}";
+            limit 5;
+            where category = 0;
+        """
+        
         try:
-            # BoardGameGeek XML API
-            url = "https://boardgamegeek.com/xmlapi2/search"
-            params = {
-                "query": query,
-                "type": "boardgame",
-                "exact": 0
-            }
-            
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                async with session.post(url, headers=headers, data=data) as resp:
+                    if resp.status == 401:  # Token abgelaufen
+                        await self._get_igdb_token()
+                        headers["Authorization"] = f"Bearer {self.igdb_token}"
+                        async with session.post(url, headers=headers, data=data) as new_resp:
+                            if new_resp.status != 200:
+                                return None
+                            games_data = await new_resp.json()
+                    elif resp.status != 200:
+                        return None
+                    else:
+                        games_data = await resp.json()
+                    
+                    games = []
+                    for game in games_data:
+                        # Cover URL formatieren
+                        cover_url = ""
+                        if game.get("cover"):
+                            cover_url = f"https:{game['cover']['url']}".replace("t_thumb", "t_cover_big")
+                        
+                        # Genres extrahieren
+                        genres = ", ".join([genre["name"] for genre in game.get("genres", [])])
+                        
+                        # Plattformen extrahieren
+                        platforms = ", ".join([platform["name"] for platform in game.get("platforms", [])])
+                        
+                        # Entwickler extrahieren
+                        developers = []
+                        for company in game.get("involved_companies", []):
+                            if company.get("developer", False):
+                                developers.append(company["company"]["name"])
+                        
+                        games.append({
+                            "external_id": str(game["id"]),
+                            "title": game.get("name", "Unbekannter Titel"),
+                            "description": game.get("summary", ""),
+                            "cover": cover_url,
+                            "release_date": str(game.get("first_release_date", ""))[:4] if game.get("first_release_date") else "",
+                            "rating": round(game.get("rating", 0), 1),
+                            "genres": genres,
+                            "platforms": platforms,
+                            "publisher": ", ".join(developers) if developers else "Unbekannt"
+                        })
+                    
+                    return games
+                    
+        except Exception as e:
+            logger.error(f"Fehler bei IGDB API-Anfrage: {e}")
+            return None
+    
+    # Brettspiele API
+    async def search_board_games(self, query: str) -> Optional[List[Dict[str, Any]]]:
+        """Sucht Brettspiele über Board Game Atlas API"""
+        if not config.BOARDGAMEATLAS_CLIENT_ID:
+            return None
+        
+        url = f"{config.BOARDGAMEATLAS_BASE_URL}/search"
+        params = {
+            "name": query,
+            "client_id": config.BOARDGAMEATLAS_CLIENT_ID,
+            "limit": 5
+        }
+        
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(url, params=params) as resp:
                     if resp.status != 200:
                         return None
                     
-                    content = await resp.text()
-                    root = ET.fromstring(content)
+                    data = await resp.json()
+                    games = data.get("games", [])
                     
-                    games = []
-                    for item in root.findall(".//item")[:5]:
-                        game_id = item.get("id")
-                        name_element = item.find(".//name")
-                        year_element = item.find(".//yearpublished")
-                        
-                        if game_id and name_element is not None:
-                            # Hole detaillierte Informationen
-                            details = await self._get_bgg_game_details(game_id)
-                            
-                            game_data = {
-                                "external_id": game_id,
-                                "title": name_element.get("value", "Unbekannter Titel"),
-                                "release_date": year_element.get("value", "") if year_element is not None else "Unbekannt",
-                                "description": details.get("description", "Keine Beschreibung verfügbar"),
-                                "rating": details.get("rating", 0),
-                                "players": details.get("players", ""),
-                                "duration": details.get("duration", 0)
-                            }
-                            
-                            games.append(game_data)
+                    results = []
+                    for game in games:
+                        results.append({
+                            "external_id": game["id"],
+                            "title": game.get("name", "Unbekannter Titel"),
+                            "description": game.get("description", ""),
+                            "cover": game.get("image_url", ""),
+                            "release_date": str(game.get("year_published", "")),
+                            "rating": round(game.get("average_user_rating", 0), 1),
+                            "players": f"{game.get('min_players', '?')}-{game.get('max_players', '?')}",
+                            "duration": game.get("min_playtime", 0),
+                            "publisher": game.get("primary_publisher", {}).get("name", "Unbekannt")
+                        })
                     
-                    return games if games else None
+                    return results
                     
         except Exception as e:
-            logger.error(f"Fehler bei BoardGameGeek API-Anfrage: {e}")
-            # Fallback: Einfache Rückgabe
-            return [{
-                "external_id": "1",
-                "title": f"{query} (Brettspiel)",
-                "description": f"Brettspiel '{query}' - Details über BoardGameGeek verfügbar",
-                "release_date": "2023",
-                "rating": 7.5,
-                "players": "2-4",
-                "duration": 60
-            }]
+            logger.error(f"Fehler bei Board Game Atlas API-Anfrage: {e}")
+            return None
     
-    async def _get_bgg_game_details(self, game_id: str) -> Dict[str, Any]:
-        """Holt detaillierte Informationen zu einem Brettspiel"""
+    # Comics API
+    async def search_comics(self, query: str) -> Optional[List[Dict[str, Any]]]:
+        """Sucht Comics über Comic Vine API"""
+        if not config.COMICVINE_API_KEY:
+            return None
+        
+        url = f"{config.COMICVINE_BASE_URL}/search"
+        params = {
+            "api_key": config.COMICVINE_API_KEY,
+            "format": "json",
+            "query": query,
+            "resources": "volume",
+            "limit": 5
+        }
+        
         try:
-            url = f"https://boardgamegeek.com/xmlapi2/thing"
-            params = {
-                "id": game_id,
-                "stats": 1
-            }
-            
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(url, params=params) as resp:
                     if resp.status != 200:
-                        return {}
+                        return None
                     
-                    content = await resp.text()
-                    root = ET.fromstring(content)
-                    item = root.find(".//item")
+                    data = await resp.json()
+                    results = data.get("results", [])
                     
-                    if item is None:
-                        return {}
+                    comics = []
+                    for comic in results:
+                        cover_url = ""
+                        if comic.get("image"):
+                            cover_url = comic["image"]["medium_url"]
+                        
+                        comics.append({
+                            "external_id": str(comic["id"]),
+                            "title": comic.get("name", "Unbekannter Titel"),
+                            "description": comic.get("description", ""),
+                            "cover": cover_url,
+                            "release_date": comic.get("start_year", ""),
+                            "publisher": comic.get("publisher", {}).get("name", "Unbekannt")
+                        })
                     
-                    # Beschreibung
-                    description_elem = item.find(".//description")
-                    description = description_elem.text if description_elem is not None else "Keine Beschreibung verfügbar"
-                    
-                    # Bewertung
-                    rating_elem = item.find(".//average")
-                    rating = float(rating_elem.get("value", 0)) if rating_elem is not None else 0
-                    
-                    # Spieleranzahl
-                    minplayers_elem = item.find(".//minplayers")
-                    maxplayers_elem = item.find(".//maxplayers")
-                    minplayers = minplayers_elem.get("value", "?") if minplayers_elem is not None else "?"
-                    maxplayers = maxplayers_elem.get("value", "?") if maxplayers_elem is not None else "?"
-                    players = f"{minplayers}-{maxplayers}"
-                    
-                    # Spieldauer
-                    playingtime_elem = item.find(".//playingtime")
-                    duration = int(playingtime_elem.get("value", 0)) if playingtime_elem is not None else 0
-                    
-                    return {
-                        "description": description,
-                        "rating": round(rating, 1),
-                        "players": players,
-                        "duration": duration
-                    }
+                    return comics
                     
         except Exception as e:
-            logger.error(f"Fehler beim Abrufen von BGG Details: {e}")
-            return {}
+            logger.error(f"Fehler bei Comic Vine API-Anfrage: {e}")
+            return None
     
-    # Videospiele API (vereinfacht)
-    async def search_video_games(self, query: str) -> Optional[List[Dict[str, Any]]]:
-        """Vereinfachte Videospiel-Suche"""
-        # Hier würde die IGDB API Integration kommen
-        # Für jetzt geben wir Platzhalter zurück
-        return [{
-            "external_id": "1",
-            "title": f"{query} (Videospiel)",
-            "description": "Videospiel-Suche - IGDB API Integration verfügbar",
-            "release_date": "2023",
-            "rating": 8.5,
-            "platforms": "PC, PlayStation, Xbox",
-            "publisher": "Verschiedene Entwickler"
-        }]
-    
-    # Comics API (vereinfacht)
-    async def search_comics(self, query: str) -> Optional[List[Dict[str, Any]]]:
-        """Vereinfachte Comic-Suche"""
-        api_key = get_config('apis.comic_vine.api_key')
-        if not api_key:
-            # Fallback ohne API Key
-            return [{
-                "external_id": "1",
-                "title": f"{query} (Comic)",
-                "description": "Comic-Suche - Comic Vine API Integration verfügbar",
-                "release_date": "2023",
-                "publisher": "Marvel/DC/Andere"
-            }]
-        
-        # Hier würde die Comic Vine API Integration kommen
-        return [{
-            "external_id": "1",
-            "title": f"{query} (Comic)",
-            "description": "Comic-Suche mit Comic Vine API",
-            "release_date": "2023",
-            "publisher": "Marvel/DC/Andere"
-        }]
-    
-    # Zeitschriften API (vereinfacht)
+    # Zeitschriften API (Google Books für Magazine)
     async def search_magazines(self, query: str) -> Optional[List[Dict[str, Any]]]:
         """Sucht Zeitschriften über Google Books API"""
-        api_key = get_config('apis.google_books.api_key')
         url = "https://www.googleapis.com/books/v1/volumes"
         params = {
             "q": f"{query} subject:magazine",
             "maxResults": 5
         }
         
-        if api_key:
-            params["key"] = api_key
+        if config.GB_API_KEY:
+            params["key"] = config.GB_API_KEY
         
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
@@ -679,7 +654,7 @@ class APIHandler:
                             "isbn": volume_info.get("industryIdentifiers", [{}])[0].get("identifier", "") if volume_info.get("industryIdentifiers") else ""
                         })
                     
-                    return magazines if magazines else None
+                    return magazines
                     
         except Exception as e:
             logger.error(f"Fehler bei Google Books Magazine API-Anfrage: {e}")
@@ -688,10 +663,7 @@ class APIHandler:
     # Hilfsmethoden
     async def _get_spotify_token(self):
         """Holt Spotify Access Token"""
-        client_id = get_config('apis.spotify.client_id')
-        client_secret = get_config('apis.spotify.client_secret')
-        
-        auth_string = f"{client_id}:{client_secret}"
+        auth_string = f"{config.SPOTIFY_CLIENT_ID}:{config.SPOTIFY_CLIENT_SECRET}"
         auth_bytes = auth_string.encode('utf-8')
         auth_base64 = base64.b64encode(auth_bytes).decode('utf-8')
         
@@ -710,6 +682,69 @@ class APIHandler:
                 else:
                     logger.error("Fehler beim Holen des Spotify Tokens")
     
+    async def _get_igdb_token(self):
+        """Holt IGDB Access Token"""
+        url = "https://id.twitch.tv/oauth2/token"
+        data = {
+            "client_id": config.IGDB_CLIENT_ID,
+            "client_secret": config.IGDB_CLIENT_SECRET,
+            "grant_type": "client_credentials"
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=data) as resp:
+                if resp.status == 200:
+                    token_data = await resp.json()
+                    self.igdb_token = token_data["access_token"]
+                else:
+                    logger.error("Fehler beim Holen des IGDB Tokens")
+    
+    async def _get_tmdb_genres(self, genre_ids: List[int]) -> List[str]:
+        """Holt Genre-Namen für TMDB Genre-IDs"""
+        if not config.TMDB_API_KEY:
+            return []
+        
+        if self.genre_cache is None:
+            await self._load_tmdb_genres()
+        
+        return [self.genre_cache[genre_id] for genre_id in genre_ids if genre_id in self.genre_cache]
+    
+    async def _load_tmdb_genres(self):
+        """Lädt alle verfügbaren Genres von TMDB"""
+        url = f"{config.TMDB_BASE_URL}/genre/movie/list"
+        params = {
+            "api_key": config.TMDB_API_KEY,
+            "language": "de-DE"
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        self.genre_cache = {genre["id"]: genre["name"] for genre in data.get("genres", [])}
+                    else:
+                        self.genre_cache = {}
+        except Exception as e:
+            logger.error(f"Fehler beim Laden der TMDB Genres: {e}")
+            self.genre_cache = {}
+    
+    async def _get_musicbrainz_cover(self, release_id: str) -> Optional[str]:
+        """Holt Cover-URL von Cover Art Archive"""
+        url = f"https://coverartarchive.org/release/{release_id}"
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        images = data.get("images", [])
+                        if images:
+                            return images[0].get("thumbnails", {}).get("small", images[0].get("image", ""))
+        except:
+            pass
+        return None
+    
     def validate_isbn(self, isbn: str) -> bool:
         """Validiert eine ISBN"""
         clean_isbn = isbn.strip().replace("-", "")
@@ -719,5 +754,4 @@ class APIHandler:
 db = Database()
 media_repo = MediaRepository(db)
 reminder_repo = ReminderRepository(db)
-dashboard_repo = DashboardRepository(db)
 api_handler = APIHandler()
