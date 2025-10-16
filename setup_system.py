@@ -64,7 +64,7 @@ class SetupSystem:
             )
         )
         
-        message = await interaction.followup.send(embed=embed, ephemeral=True)
+        message = await interaction.followup.send(embed=embed, ephemeral=false)
         
         try:
             await message.add_reaction('✅')

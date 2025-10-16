@@ -2,7 +2,7 @@
 
 echo "Starting MedienBot..."
 echo "Checking Python version..."
-git push 
+git pull
 # Check if Python 3.11+ is available
 if command -v python3.11 &>/dev/null; then
     PYTHON_CMD=python3.11
